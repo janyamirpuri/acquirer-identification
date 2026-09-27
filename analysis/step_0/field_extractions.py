@@ -1,48 +1,15 @@
-"""
-agentic_deal_extractor.py
-
-The agent loop: takes a free-text deal description and drives an Ollama
-model (through the OpenAI-compatible client) through the tools defined in
-deal_tagging_tools.py until it produces a final JSON DealRecord.
-
-Setup:
-    pip install openai pydantic pandas
-    ollama pull llama3.1          # or qwen2.5, mistral-nemo, firefunction-v2 --
-                                   # any Ollama model that supports tool calling
-    ollama serve                  # if not already running
-
-Usage:
-    python agentic_deal_extractor.py \
-        --csv external_docs/ma_transactions_500.csv \
-        --description "Healthcare Services | Deal Size: ~$200M EV | Profile: Mid-market, private, regional, strong EBITDA margins"
-
-
-"""
-
 from __future__ import annotations
+
 import json
-import argparse
-import sys
-from pathlib import Path
-from pydantic import ValidationError
+
 import dotenv
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from pydantic import ValidationError
 
-from llm_service import build_tool_call_chain
+from ..llm_service import client_instance
+from .tool_definitions import DealComps, DealRecord, dispatch_tool_call, make_langchain_tools
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
-try:
-    from deal_tagging_tools import DealComps, DealRecord, TOOL_SCHEMAS, dispatch_tool_call, make_langchain_tools
-except ImportError:
-    from .deal_tagging_tools import DealComps, DealRecord, TOOL_SCHEMAS, dispatch_tool_call, make_langchain_tools
-
-try:
-    from llm_service import client_instance
-except ImportError:
-    from ...llm_service import client_instance
 
 dotenv.load_dotenv()
 
@@ -72,11 +39,25 @@ markdown fences, and no further tool calls in that message.
 """
 
 
+def _tool_result_message(call, comps: DealComps) -> ToolMessage:
+    name = call.get("name")
+    args = call.get("args") or {}
+    try:
+        result = dispatch_tool_call(comps, name, args)
+    except Exception as exc:  # bad args, unknown tool, etc. -- feed the error back to the model
+        result = {"error": str(exc)}
+
+    return ToolMessage(
+        content=json.dumps(result, default=str),
+        tool_call_id=call.get("id"),
+    )
+
+
 def extract_deal_record(
     description: str,
     comps: DealComps,
     client=None,
-    max_turns: int = 8,
+    max_turns: int = 4,
 ) -> DealRecord:
     if client is None:
         client = client_instance()
@@ -87,29 +68,17 @@ def extract_deal_record(
         HumanMessage(content=description),
     ]
 
-    model = build_tool_call_chain(client, tools)
+    model = client.bind_tools(tools) if tools else client
 
-    for turn in range(max_turns):
+    for _ in range(max_turns):
         response = model.invoke(messages)
         messages.append(response)
 
-        if not getattr(response, "tool_calls", None):
+        tool_calls = getattr(response, "tool_calls", None) or []
+        if not tool_calls:
             return _parse_final_json(response.content)
 
-        for call in response.tool_calls:
-            name = call.get("name")
-            args = call.get("args") or {}
-            try:
-                result = dispatch_tool_call(comps, name, args)
-            except Exception as e:  # bad args, unknown tool, etc. -- feed the error back to the model
-                result = {"error": str(e)}
-
-            messages.append(
-                ToolMessage(
-                    content=json.dumps(result, default=str),
-                    tool_call_id=call.get("id"),
-                )
-            )
+        messages.extend(_tool_result_message(call, comps) for call in tool_calls)
 
     raise RuntimeError(f"Agent did not converge on a final answer within {max_turns} turns")
 

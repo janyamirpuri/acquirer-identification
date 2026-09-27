@@ -1,44 +1,11 @@
-"""
-deal_tagging_tools.py
-
-Tool library for an LLM agent that fits free-text deal descriptions into a
-structured schema, using a CSV of prior deals as the reference set for
-calibrating relative descriptors (e.g. "strong EBITDA margin").
-
-Design notes
-------------
-- Percentile thresholds for "strong / standard / weak" are computed live
-  from the reference CSV, not hardcoded -- they update automatically as
-  more deals get added to the book.
-- Relative descriptors (margin, growth) are usually sector-dependent: a
-  "strong" EBITDA margin in Health IT looks nothing like one in Healthcare
-  Services. `group_by` lets you compute percentiles within a peer group
-  (e.g. sector) instead of the whole population, and falls back to the
-  full dataset automatically if the peer group is too thin to be
-  statistically meaningful (< min_group_size rows).
-- Every public method on DealComps is meant to be exposed to the LLM as a
-  callable tool. TOOL_SCHEMAS at the bottom gives Claude/OpenAI-style
-  JSON tool definitions you can pass straight into a tool-use API call.
-- Deterministic arithmetic (implied multiples) is done in code, not left
-  for the model to compute -- cheaper and removes a class of hallucinated
-  numbers.
-"""
-
 from __future__ import annotations
 import json
 from typing import Optional, Literal
 import pandas as pd
 from pydantic import BaseModel, Field
-
-try:
-    from langchain_core.tools import StructuredTool
-except ImportError:  # pragma: no cover
-    StructuredTool = None
+from langchain_core.tools import StructuredTool
 
 
-# --------------------------------------------------------------------------
-# 1. Target output schema -- what the agent is ultimately filling in
-# --------------------------------------------------------------------------
 
 class DealRecord(BaseModel):
     sector: str
@@ -53,10 +20,6 @@ class DealRecord(BaseModel):
     revenue_growth_pct: Optional[float] = None
     geography: Optional[str] = None
     target_ownership_pre: Optional[Literal["Public", "Private"]] = None
-
-# --------------------------------------------------------------------------
-# 2. Reference-deal comps engine
-# --------------------------------------------------------------------------
 
 class DealComps:
     def __init__(self, csv_path: str, min_group_size: int = 15):
@@ -88,7 +51,6 @@ class DealComps:
 
         series = subset[column].dropna()
         if len(series) < 5:
-            # peer group (or whole file) too thin -- fall back to full population
             series = self.df[column].dropna()
             used_group = None
 
@@ -111,7 +73,6 @@ class DealComps:
         }
 
 
-    # ---- tool: implied multiple (deterministic, no LLM arithmetic) ----
     @staticmethod
     def compute_implied_multiple(deal_size_mm: float, metric_mm: float) -> Optional[float]:
         """EV / metric, e.g. deal_size_mm / target_ebitda_mm -> ev_ebitda_multiple."""
@@ -119,10 +80,6 @@ class DealComps:
             return None
         return round(deal_size_mm / metric_mm, 2)
 
-
-# --------------------------------------------------------------------------
-# 3. Tool schemas for an LLM tool-use loop
-# --------------------------------------------------------------------------
 
 TOOL_SCHEMAS = [
     {
@@ -164,17 +121,11 @@ TOOL_SCHEMAS = [
     },
 ]
 
-
-# --------------------------------------------------------------------------
-# 4. Dispatcher -- wire tool_use blocks from the API straight into DealComps
-# --------------------------------------------------------------------------
-
 def dispatch_tool_call(comps: DealComps, tool_name: str, tool_input: dict):
     fn = getattr(comps, tool_name, None)
     if fn is None:
         raise ValueError(f"No such tool: {tool_name}")
     return fn(**tool_input)
-
 
 def make_langchain_tools(comps: DealComps):
     """Expose DealComps as LangChain tools while preserving the same tool names and behavior."""
@@ -200,13 +151,3 @@ def make_langchain_tools(comps: DealComps):
             ),
         ),
     ]
-
-
-if __name__ == "__main__":
-    # quick smoke test -- point this at your real CSV path
-    comps = DealComps("external_docs/ma_transactions_500.csv")
-    print(json.dumps(comps.relative_stat_thresholds("ebitda_margin_pct"), indent=2))
-    print(json.dumps(
-        comps.relative_stat_thresholds("ebitda_margin_pct", group_by="sector", group_value="Healthcare Services"),
-        indent=2,
-    ))
