@@ -9,7 +9,7 @@ In a bash terminal:
 python -m venv .venv
 
 # activate the venv
-source .venv/bin/activate
+source .venv/Scripts/activate
 
 # install requirements
 pip install -r requirements.txt
