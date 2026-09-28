@@ -8,18 +8,17 @@ from langchain_core.tools import StructuredTool
 
 
 class DealRecord(BaseModel):
-    sector: str
-    sub_sector: Optional[str] = None
-    deal_size_mm: Optional[float] = None
-    deal_type: Optional[str] = None
-    target_revenue_mm: Optional[float] = None
-    target_ebitda_mm: Optional[float] = None
-    ev_ebitda_multiple: Optional[float] = None
-    ev_revenue_multiple: Optional[float] = None
-    ebitda_margin_pct: Optional[float] = None
-    revenue_growth_pct: Optional[float] = None
-    geography: Optional[str] = None
-    target_ownership_pre: Optional[Literal["Public", "Private"]] = None
+    sector: Optional[str] = Field(default=None, description="Sector of the target company")
+    sub_sector: Optional[str] = Field(default=None, description="Sub-sector of the target company")
+    deal_size_mm: Optional[float] = Field(default=None, description="Enterprise value of the transaction in USD millions")
+    target_revenue_mm: Optional[float] = Field(default=None, description="Target company's revenue in USD millions")
+    target_ebitda_mm: Optional[float] = Field(default=None, description="Target company's EBITDA in USD millions")
+    ev_ebitda_multiple: Optional[float] = Field(default=None, description="Enterprise value / target EBITDA multiple")
+    ev_revenue_multiple: Optional[float] = Field(default=None, description="Enterprise value / target revenue multiple")
+    ebitda_margin_pct: Optional[float] = Field(default=None, description="Target company's EBITDA margin in percentage")
+    revenue_growth_pct: Optional[float] = Field(default=None, description="Target company's revenue growth in percentage")
+    geography: Optional[str] = Field(default=None, description="Geography of the target company")
+    target_ownership_pre: Optional[str] = Field(default=None, description="Target company's ownership status before the deal")
 
 class DealComps:
     def __init__(self, csv_path: str, min_group_size: int = 15):

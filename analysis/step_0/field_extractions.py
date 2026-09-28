@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import dotenv
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
@@ -12,6 +13,8 @@ from .tool_definitions import DealComps, DealRecord, dispatch_tool_call, make_la
 
 
 dotenv.load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are an M&A deal-tagging analyst. You will be given a free-text
 description of a target company / deal. Fit it into this exact JSON schema:
@@ -59,6 +62,7 @@ def extract_deal_record(
     client=None,
     max_turns: int = 4,
 ) -> DealRecord:
+    logger.info("Starting deal extraction for description length=%s", len(description))
     if client is None:
         client = client_instance()
 
@@ -70,14 +74,17 @@ def extract_deal_record(
 
     model = client.bind_tools(tools) if tools else client
 
-    for _ in range(max_turns):
+    for turn in range(max_turns):
+        logger.info("Deal extraction turn %s/%s", turn + 1, max_turns)
         response = model.invoke(messages)
         messages.append(response)
 
         tool_calls = getattr(response, "tool_calls", None) or []
         if not tool_calls:
+            logger.info("Deal extraction returned final structured response")
             return _parse_final_json(response.content)
 
+        logger.info("Deal extraction requested %s tool calls", len(tool_calls))
         messages.extend(_tool_result_message(call, comps) for call in tool_calls)
 
     raise RuntimeError(f"Agent did not converge on a final answer within {max_turns} turns")

@@ -1,10 +1,13 @@
 import json
+import logging
 import re
 
 import numpy as np
 import pandas as pd
 
 from analysis.llm_service import chat, client_instance
+
+logger = logging.getLogger(__name__)
 
 NUMERIC_SCORE_COLUMNS = [
     "deal_size_mm",
@@ -151,12 +154,14 @@ def categorical_scoring(transactions_df: pd.DataFrame, target_info: dict, client
         client = client_instance()
 
     scored_df = transactions_df.copy()
+    logger.info("Scoring %s categorical columns against target", len(CATEGORICAL_SCORE_COLUMNS))
 
     for column in CATEGORICAL_SCORE_COLUMNS:
         if column not in scored_df.columns or target_info.get(column) is None:
             continue
 
         unique_terms = scored_df[column].dropna().unique().tolist()
+        logger.info("Scoring categorical field '%s' with %s unique values", column, len(unique_terms))
         score_map = score_unique_values(unique_terms, target_info[column], client=client)
         scored_df[f"categorical_score_{column}"] = scored_df[column].map(score_map)
 
@@ -164,14 +169,34 @@ def categorical_scoring(transactions_df: pd.DataFrame, target_info: dict, client
 
 
 def full_scoring_method(transactions_df: pd.DataFrame, target_info: dict, client=None) -> pd.DataFrame:
-    """Combine categorical similarity and numeric proximity into a single per-deal score."""
+
     original_columns = transactions_df.columns
     scored_df = categorical_scoring(transactions_df, target_info, client)
     scored_df = _score_absolute_distance_feature(scored_df, target_info)
     scored_df = _score_log_distance_feature(scored_df, target_info)
 
-    score_columns = [column for column in scored_df.columns if column.startswith("score")]
-    scored_df["similarity_score"] = scored_df[score_columns].mean(axis=1)
+    categorical_columns = [
+        f"categorical_score_{column}"
+        for column in CATEGORICAL_SCORE_COLUMNS
+        if f"categorical_score_{column}" in scored_df.columns
+    ]
+    non_categorical_columns = [
+        column for column in scored_df.columns
+        if column.startswith("score") and column not in categorical_columns
+    ]
+
+    if categorical_columns and non_categorical_columns:
+        scored_df["similarity_score"] = (
+            0.4 * scored_df[categorical_columns].mean(axis=1)
+            + 0.6 * scored_df[non_categorical_columns].mean(axis=1)
+        )
+    elif categorical_columns:
+        scored_df["similarity_score"] = scored_df[categorical_columns].mean(axis=1)
+    elif non_categorical_columns:
+        scored_df["similarity_score"] = scored_df[non_categorical_columns].mean(axis=1)
+    else:
+        scored_df["similarity_score"] = 0.0
+
     return scored_df[original_columns.tolist() + ["similarity_score"]]
 
 
@@ -186,9 +211,8 @@ def acquirer_identification(transactions_df: pd.DataFrame, target_info: dict, cl
         .rename(columns={"mean": "avg_score", "count": "n_deals"})
     )
 
-    print(grouped["n_deals"].mean())
     grouped["reliability_score"] = (
         grouped["n_deals"] * grouped["avg_score"] + RELIABILITY_WEIGHT * global_mean
     ) / (grouped["n_deals"] + RELIABILITY_WEIGHT)
 
-    return grouped.sort_values("reliability_score", ascending=False).reset_index()[:10]["acquirer"]
+    return grouped.sort_values("reliability_score", ascending=False).reset_index()[:10]["acquirer"].tolist()
