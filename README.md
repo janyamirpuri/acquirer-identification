@@ -9,7 +9,7 @@ In a bash terminal:
 python -m venv .venv
 
 # activate the venv
-source .venv/bin/activate
+source .venv/Scripts/activate
 
 # install requirements
 pip install -r requirements.txt
@@ -23,7 +23,7 @@ Add a `.env` file and set:
 Then run:
 
 ```bash
-streamlit app.py
+streamlit run app.py
 ```
 
 Then, upload a CSV and optionally change the target description.
