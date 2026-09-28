@@ -23,7 +23,7 @@ Add a `.env` file and set:
 Then run:
 
 ```bash
-streamlit app.py
+streamlit run app.py
 ```
 
 Then, upload a CSV and optionally change the target description.
