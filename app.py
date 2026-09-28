@@ -133,7 +133,9 @@ def main():
         result = pipeline.invoke({"csv": saved_csv_path, "description": description})
         sub_analyses = [rationale.model_dump() for rationale in result["rationales"]]
         html_out = build_html(sub_analyses)
-        st.success(f"Wrote {len(sub_analyses)} entries to user_output.html")
+        with open("external_docs/user_output.html", "w", encoding="utf-8") as f:
+            f.write(html_out)
+        st.success(f"Wrote {len(sub_analyses)} entries to external_docs/user_output.html")
         st.info(f"Pipeline execution time: {time.time() - time0:.2f} seconds")
         st.download_button("Download Analysis", file_name="user_output.html", data=html_out, mime="text/html")
 
