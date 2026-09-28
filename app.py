@@ -91,6 +91,19 @@ def build_pipeline(client=None):
     )
 
 
+def run_analysis_pipeline(csv_path: str, description: str, client=None):
+    """Run the full analysis and raise a user-friendly error if any stage fails."""
+    try:
+        pipeline = build_pipeline(client=client)
+        result = pipeline.invoke({"csv": csv_path, "description": description})
+        if "rationales" not in result:
+            raise RuntimeError("Analysis pipeline returned no rationales.")
+        return [rationale.model_dump() for rationale in result["rationales"]]
+    except Exception as exc:
+        logger.exception("Analysis pipeline failed for csv=%s", csv_path)
+        raise RuntimeError(f"Analysis failed: {exc}") from exc
+
+
 # def main():
 #     parser = argparse.ArgumentParser()
 #     parser.add_argument("--csv", required=True, help="Path to the prior deals CSV")
@@ -129,15 +142,17 @@ def main():
         saved_csv_path = _save_uploaded_csv(csv_file)
 
         st.info("Running analysis...")
-        pipeline = build_pipeline()
-        result = pipeline.invoke({"csv": saved_csv_path, "description": description})
-        sub_analyses = [rationale.model_dump() for rationale in result["rationales"]]
-        html_out = build_html(sub_analyses)
-        with open("external_docs/user_output.html", "w", encoding="utf-8") as f:
-            f.write(html_out)
-        st.success(f"Wrote {len(sub_analyses)} entries to external_docs/user_output.html")
-        st.info(f"Pipeline execution time: {time.time() - time0:.2f} seconds")
-        st.download_button("Download Analysis", file_name="user_output.html", data=html_out, mime="text/html")
+        try:
+            sub_analyses = run_analysis_pipeline(saved_csv_path, description)
+            html_out = build_html(sub_analyses)
+            with open("external_docs/user_output.html", "w", encoding="utf-8") as f:
+                f.write(html_out)
+            st.success(f"Wrote {len(sub_analyses)} entries to external_docs/user_output.html")
+            st.info(f"Pipeline execution time: {time.time() - time0:.2f} seconds")
+            st.download_button("Download Analysis", file_name="user_output.html", data=html_out, mime="text/html")
+        except Exception as exc:
+            logger.exception("User-triggered analysis failed")
+            st.error(f"Analysis failed: {exc}")
 
 
 if __name__ == "__main__":

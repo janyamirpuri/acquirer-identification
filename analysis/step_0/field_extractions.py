@@ -76,13 +76,22 @@ def extract_deal_record(
 
     for turn in range(max_turns):
         logger.info("Deal extraction turn %s/%s", turn + 1, max_turns)
-        response = model.invoke(messages)
+        try:
+            response = model.invoke(messages)
+        except Exception as exc:
+            logger.exception("Deal extraction LLM call failed during turn %s/%s", turn + 1, max_turns)
+            raise RuntimeError(f"LLM call failed while extracting deal record: {exc}") from exc
+
         messages.append(response)
 
         tool_calls = getattr(response, "tool_calls", None) or []
         if not tool_calls:
             logger.info("Deal extraction returned final structured response")
-            return _parse_final_json(response.content)
+            try:
+                return _parse_final_json(response.content)
+            except ValueError as exc:
+                logger.exception("Final JSON from deal extraction was invalid")
+                raise RuntimeError(f"Failed to parse final deal extraction JSON: {exc}") from exc
 
         logger.info("Deal extraction requested %s tool calls", len(tool_calls))
         messages.extend(_tool_result_message(call, comps) for call in tool_calls)

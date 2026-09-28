@@ -80,13 +80,22 @@ def generate_rationale(
 
     for turn in range(max_turns):
         logger.info("Rationale generation turn %s/%s for %s", turn + 1, max_turns, acquirer)
-        response = model.invoke(messages)
+        try:
+            response = model.invoke(messages)
+        except Exception as exc:
+            logger.exception("Rationale generation LLM call failed for %s during turn %s/%s", acquirer, turn + 1, max_turns)
+            raise RuntimeError(f"LLM call failed while generating rationale for {acquirer}: {exc}") from exc
+
         messages.append(response)
 
         tool_calls = getattr(response, "tool_calls", None) or []
         if not tool_calls:
             logger.info("Rationale for %s completed without additional tool calls", acquirer)
-            return _parse_final_json(response.content)
+            try:
+                return _parse_final_json(response.content)
+            except ValueError as exc:
+                logger.exception("Final JSON from rationale generation was invalid for %s", acquirer)
+                raise RuntimeError(f"Failed to parse final rationale JSON for {acquirer}: {exc}") from exc
 
         logger.info("Rationale for %s requested %s tool calls", acquirer, len(tool_calls))
         messages.extend(_tool_result_message(call, comps) for call in tool_calls)

@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 
 import app
+from analysis.llm_service import chat
 from analysis.step_0.field_extractions import _parse_final_json
 from analysis.step_1.transaction_scoring import full_scoring_method
 from analysis.step_2.tool_definitions import CSV_Analytics
@@ -19,6 +20,23 @@ def test_parse_final_json_strips_markdown_fence():
     assert record.sector == "Healthcare Services"
     assert record.deal_size_mm == 200.0
     assert record.target_ebitda_mm == 40.0
+
+
+def test_chat_retries_transient_failures():
+    attempts = {"count": 0}
+
+    class FakeResponse:
+        content = "ok"
+
+    class FakeClient:
+        def invoke(self, prompt):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise TimeoutError("temporary LLM timeout")
+            return FakeResponse()
+
+    assert chat("hello", client=FakeClient()) == "ok"
+    assert attempts["count"] == 2
 
 
 def test_full_scoring_method_returns_similarity_scores(monkeypatch):
