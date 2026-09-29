@@ -5,11 +5,13 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 
 import dotenv
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.messages import SystemMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from pydantic import ValidationError
 
 from ..llm_service import client_instance
-from .tool_definitions import CSV_Analytics, Rationale, dispatch_tool_call, make_langchain_tools
+from .tool_definitions import CSV_Analytics, Rationale, make_langchain_tools
 
 
 dotenv.load_dotenv()
@@ -43,20 +45,6 @@ markdown fences, and no further tool calls in that message.
 """
 
 
-def _tool_result_message(call, comps: CSV_Analytics) -> ToolMessage:
-    name = call.get("name")
-    args = call.get("args") or {}
-    try:
-        result = dispatch_tool_call(comps, name, args)
-    except Exception as exc:  # bad args, unknown tool, etc. -- feed the error back to the model
-        result = {"error": str(exc)}
-
-    return ToolMessage(
-        content=json.dumps(result, default=str),
-        tool_call_id=call.get("id"),
-    )
-
-
 def generate_rationale(
     acquirer: str,
     target_description: str,
@@ -69,38 +57,35 @@ def generate_rationale(
         client = client_instance()
 
     tools = make_langchain_tools(comps)
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT.format(schema=Rationale.model_json_schema())),
-        HumanMessage(
-            content=f"Target profile: {target_description}\n\nCandidate acquirer: {acquirer}"
-        ),
-    ]
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            SystemMessage(content=SYSTEM_PROMPT.format(schema=Rationale.model_json_schema())),
+            ("human", "Target profile: {target_description}\n\nCandidate acquirer: {acquirer}"),
+            MessagesPlaceholder(variable_name="agent_scratchpad"),
+        ]
+    )
+    agent = create_tool_calling_agent(client, tools, prompt)
+    executor = AgentExecutor(
+        agent=agent,
+        tools=tools,
+        max_iterations=max_turns,
+        early_stopping_method="force",
+    )
 
-    model = client.bind_tools(tools) if tools else client
+    logger.info("Executing rationale agent for %s with max_iterations=%s", acquirer, max_turns)
+    try:
+        result = executor.invoke(
+            {"target_description": target_description, "acquirer": acquirer}
+        )
+    except Exception as exc:
+        logger.exception("Rationale agent execution failed for %s", acquirer)
+        raise RuntimeError(f"LLM call failed while generating rationale for {acquirer}: {exc}") from exc
 
-    for turn in range(max_turns):
-        logger.info("Rationale generation turn %s/%s for %s", turn + 1, max_turns, acquirer)
-        try:
-            response = model.invoke(messages)
-        except Exception as exc:
-            logger.exception("Rationale generation LLM call failed for %s during turn %s/%s", acquirer, turn + 1, max_turns)
-            raise RuntimeError(f"LLM call failed while generating rationale for {acquirer}: {exc}") from exc
-
-        messages.append(response)
-
-        tool_calls = getattr(response, "tool_calls", None) or []
-        if not tool_calls:
-            logger.info("Rationale for %s completed without additional tool calls", acquirer)
-            try:
-                return _parse_final_json(response.content)
-            except ValueError as exc:
-                logger.exception("Final JSON from rationale generation was invalid for %s", acquirer)
-                raise RuntimeError(f"Failed to parse final rationale JSON for {acquirer}: {exc}") from exc
-
-        logger.info("Rationale for %s requested %s tool calls", acquirer, len(tool_calls))
-        messages.extend(_tool_result_message(call, comps) for call in tool_calls)
-
-    raise RuntimeError(f"Agent did not converge on a rationale within {max_turns} turns")
+    try:
+        return _parse_final_json(result["output"])
+    except (KeyError, ValueError) as exc:
+        logger.exception("Final JSON from rationale generation was invalid for %s", acquirer)
+        raise RuntimeError(f"Failed to parse final rationale JSON for {acquirer}: {exc}") from exc
 
 
 def _parse_final_json(content: str) -> Rationale:

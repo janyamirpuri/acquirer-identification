@@ -5,13 +5,11 @@ import pandas as pd
 from pydantic import BaseModel, Field
 from langchain_core.tools import StructuredTool
 
-
-
 class DealRecord(BaseModel):
     sector: Optional[str] = Field(default=None, description="Sector of the target company")
     sub_sector: Optional[str] = Field(default=None, description="Sub-sector of the target company")
     deal_size_mm: Optional[float] = Field(default=None, description="Enterprise value of the transaction in USD millions")
-    target_revenue_mm: Optional[float] = Field(default=None, description="Target company's revenue in USD millions")
+    target_revenue_mm: Optional[float] = Field(default=None, description="Target company's revenue (market) in USD millions")
     target_ebitda_mm: Optional[float] = Field(default=None, description="Target company's EBITDA in USD millions")
     ev_ebitda_multiple: Optional[float] = Field(default=None, description="Enterprise value / target EBITDA multiple")
     ev_revenue_multiple: Optional[float] = Field(default=None, description="Enterprise value / target revenue multiple")
@@ -25,7 +23,6 @@ class DealComps:
         self.df = pd.read_csv(csv_path)
         self.min_group_size = min_group_size
 
-    # ---- tool: relative stat thresholds ----
     def relative_stat_thresholds(
         self,
         column: str,
@@ -36,17 +33,19 @@ class DealComps:
         Compute the 25th/50th/75th percentile break points for `column`,
         optionally within a peer group (group_by == group_value), and
         return the strong/standard/weak bucket definitions.
+        (other relative terms accepted, such as low/mid/high)
         """
         if column not in self.df.columns:
             raise ValueError(f"Unknown column: {column}")
 
         subset = self.df
         used_group = None
-        if group_by and group_value and group_by in self.df.columns:
-            candidate = self.df[self.df[group_by] == group_value]
-            if len(candidate) >= self.min_group_size:
-                subset = candidate
-                used_group = group_value
+        if group_by in self.df.columns:
+            if group_value in self.df[group_by].values:
+                candidate = self.df[self.df[group_by] == group_value]
+                if len(candidate) >= self.min_group_size:
+                    subset = candidate
+                    used_group = group_value
 
         series = subset[column].dropna()
         if len(series) < 5:
@@ -64,61 +63,16 @@ class DealComps:
             "p25": round(p25, 3),
             "p50": round(p50, 3),
             "p75": round(p75, 3),
-            "tiers": {
-                "weak": f"< {round(p25, 3)}",
-                "standard": f"{round(p25, 3)} - {round(p75, 3)}",
-                "strong": f"> {round(p75, 3)}",
-            },
         }
 
 
     @staticmethod
     def compute_implied_multiple(deal_size_mm: float, metric_mm: float) -> Optional[float]:
         """EV / metric, e.g. deal_size_mm / target_ebitda_mm -> ev_ebitda_multiple."""
-        if not metric_mm:
+        if not metric_mm or deal_size_mm is None:
             return None
         return round(deal_size_mm / metric_mm, 2)
-
-
-TOOL_SCHEMAS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "relative_stat_thresholds",
-            "description": (
-                "Get the strong/standard/weak percentile breakpoints for a numeric "
-                "column in the prior-deals CSV (25th/50th/75th percentile cuts), "
-                "optionally computed within a peer group such as sector."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "column": {"type": "string", "description": "e.g. 'ebitda_margin_pct'"},
-                    "group_by": {"type": "string", "description": "e.g. 'sector' (optional)"},
-                    "group_value": {"type": "string", "description": "e.g. 'Healthcare Services' (optional)"},
-                },
-                "required": ["column"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "compute_implied_multiple",
-            "description": "Deterministically compute EV / metric (e.g. EV/EBITDA or EV/Revenue). Always use this instead of doing the division yourself.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "deal_size_mm": {"type": "number"},
-                    "metric_mm": {"type": "number"},
-                },
-                "required": ["deal_size_mm", "metric_mm"],
-                "additionalProperties": False,
-            },
-        },
-    },
-]
+    
 
 def dispatch_tool_call(comps: DealComps, tool_name: str, tool_input: dict):
     fn = getattr(comps, tool_name, None)
@@ -136,8 +90,8 @@ def make_langchain_tools(comps: DealComps):
             func=comps.relative_stat_thresholds,
             name="relative_stat_thresholds",
             description=(
-                "Get the strong/standard/weak percentile breakpoints for a numeric column "
-                "in the prior-deals CSV (33rd/66th percentile cuts), optionally computed within "
+                "Get the strong/standard/weak (other relative terms accepted, such as low/mid/high) percentile breakpoints for a numeric column "
+                "in the prior-deals CSV (25th/50th/75th percentile cuts), optionally computed within "
                 "a peer group such as sector."
             ),
         ),

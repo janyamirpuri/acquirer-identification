@@ -4,11 +4,14 @@ import json
 import logging
 
 import dotenv
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.messages import SystemMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from pydantic import ValidationError
 
 from ..llm_service import client_instance
-from .tool_definitions import DealComps, DealRecord, dispatch_tool_call, make_langchain_tools
+from .tool_definitions import DealComps, DealRecord, make_langchain_tools
+
 
 
 
@@ -24,7 +27,7 @@ description of a target company / deal. Fit it into this exact JSON schema:
 Rules:
 - Use the provided tools to ground every relative or derived judgment. Never guess a
 strong/standard/weak label, a category name, or a multiple -- call the matching tool instead.
-- For sector, sub_sector, deal_type, geography and acquirer_type, category names do not need to
+- For sector, sub_sector, geography, category names do not need to
 match exactly any reference list; just use the names as given in the description.
 - If the description gives you enough of deal_size_mm / target_ebitda_mm / target_revenue_mm
 to back out a multiple, call `compute_implied_multiple` rather than dividing yourself.
@@ -33,6 +36,7 @@ call `relative_stat_thresholds` (grouped by sector where relevant) to find the n
 that word maps to in this market, then pick a value inside that range for the field.
 - For labels, assume that M or MM refers to millions and adjust the numeric values accordingly.
 - Note that deal size is akin to enterprise value (EV) and should be treated as such.
+- the term 'market' refers to company revenue
 - For general qualitative information, capture any relevant context or details provided
 in the description that is not already covered by the other fields.
 - Leave a field null if there truly isn't enough information to estimate it -- do not invent    
@@ -40,20 +44,6 @@ a number with no basis.
 - Once you have everything you need, respond with ONLY the final JSON object: no prose, no
 markdown fences, and no further tool calls in that message.
 """
-
-
-def _tool_result_message(call, comps: DealComps) -> ToolMessage:
-    name = call.get("name")
-    args = call.get("args") or {}
-    try:
-        result = dispatch_tool_call(comps, name, args)
-    except Exception as exc:  # bad args, unknown tool, etc. -- feed the error back to the model
-        result = {"error": str(exc)}
-
-    return ToolMessage(
-        content=json.dumps(result, default=str),
-        tool_call_id=call.get("id"),
-    )
 
 
 def extract_deal_record(
@@ -67,36 +57,35 @@ def extract_deal_record(
         client = client_instance()
 
     tools = make_langchain_tools(comps)
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT.format(schema=DealRecord.model_json_schema())),
-        HumanMessage(content=description),
-    ]
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            SystemMessage(content=SYSTEM_PROMPT.format(schema=DealRecord.model_json_schema())),
+            ("human", "{description}"),
+            MessagesPlaceholder(variable_name="agent_scratchpad"),
+        ]
+    )
+    agent = create_tool_calling_agent(client, tools, prompt)
+    executor = AgentExecutor(
+        agent=agent,
+        tools=tools,
+        max_iterations=max_turns,
+        early_stopping_method="force",
+    )
 
-    model = client.bind_tools(tools) if tools else client
+    logger.info("Executing deal extraction agent with max_iterations=%s", max_turns)
+    try:
+        result = executor.invoke({"description": description})
+    except Exception as exc:
+        logger.exception("Deal extraction agent execution failed")
+        raise RuntimeError(f"LLM call failed while extracting deal record: {exc}") from exc
 
-    for turn in range(max_turns):
-        logger.info("Deal extraction turn %s/%s", turn + 1, max_turns)
-        try:
-            response = model.invoke(messages)
-        except Exception as exc:
-            logger.exception("Deal extraction LLM call failed during turn %s/%s", turn + 1, max_turns)
-            raise RuntimeError(f"LLM call failed while extracting deal record: {exc}") from exc
-
-        messages.append(response)
-
-        tool_calls = getattr(response, "tool_calls", None) or []
-        if not tool_calls:
-            logger.info("Deal extraction returned final structured response")
-            try:
-                return _parse_final_json(response.content)
-            except ValueError as exc:
-                logger.exception("Final JSON from deal extraction was invalid")
-                raise RuntimeError(f"Failed to parse final deal extraction JSON: {exc}") from exc
-
-        logger.info("Deal extraction requested %s tool calls", len(tool_calls))
-        messages.extend(_tool_result_message(call, comps) for call in tool_calls)
-
-    raise RuntimeError(f"Agent did not converge on a final answer within {max_turns} turns")
+    try:
+        info = _parse_final_json(result["output"])
+        logger.info(info)
+        return info
+    except (KeyError, ValueError) as exc:
+        logger.exception("Final JSON from deal extraction was invalid")
+        raise RuntimeError(f"Failed to parse final deal extraction JSON: {exc}") from exc
 
 
 def _parse_final_json(content: str) -> DealRecord:

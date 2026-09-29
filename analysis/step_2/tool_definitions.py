@@ -21,56 +21,51 @@ class CSV_Analytics:
         self.df = pd.read_csv(csv_path)
         self.min_group_size = min_group_size
 
-    # ---- tool: relative stat thresholds ----
     def relative_stat_thresholds(
-        self,
-        column: str,
-        group_by: Optional[str] = None,
-        group_value: Optional[str] = None,
-    ) -> dict:
-        """
-        Compute the 25th/50th/75th percentile break points for `column`,
-        optionally within a peer group (group_by == group_value), and
-        return the strong/standard/weak bucket definitions.
-        """
-        if column not in self.df.columns:
-            raise ValueError(f"Unknown column: {column}")
+            self,
+            column: str,
+            group_by: Optional[str] = None,
+            group_value: Optional[str] = None,
+        ) -> dict:
+            """
+            Compute the 25th/50th/75th percentile break points for `column`,
+            optionally within a peer group (group_by == group_value), and
+            return the strong/standard/weak bucket definitions.
+            """
+            if column not in self.df.columns:
+                raise ValueError(f"Unknown column: {column}")
 
-        subset = self.df
-        used_group = None
-        if group_by and group_value and group_by in self.df.columns:
-            candidate = self.df[self.df[group_by] == group_value]
-            if len(candidate) >= self.min_group_size:
-                subset = candidate
-                used_group = group_value
-
-        series = subset[column].dropna()
-        if len(series) < 5:
-            series = self.df[column].dropna()
+            subset = self.df
             used_group = None
+            if group_by in self.df.columns:
+                if group_value in self.df[group_by].values:
+                    candidate = self.df[self.df[group_by] == group_value]
+                    if len(candidate) >= self.min_group_size:
+                        subset = candidate
+                        used_group = group_value
 
-        p25 = float(series.quantile(0.25))
-        p50 = float(series.quantile(0.50))
-        p75 = float(series.quantile(0.75))
+            series = subset[column].dropna()
+            if len(series) < 5:
+                series = self.df[column].dropna()
+                used_group = None
 
-        return {
-            "column": column,
-            "peer_group": {"field": group_by, "value": used_group} if used_group else None,
-            "n_deals": int(len(series)),
-            "p25": round(p25, 3),
-            "p50": round(p50, 3),
-            "p75": round(p75, 3),
-            "tiers": {
-                "weak": f"< {round(p25, 3)}",
-                "standard": f"{round(p25, 3)} - {round(p75, 3)}",
-                "strong": f"> {round(p75, 3)}",
-            },
-        }
+            p25 = float(series.quantile(0.25))
+            p50 = float(series.quantile(0.50))
+            p75 = float(series.quantile(0.75))
+
+            return {
+                "column": column,
+                "peer_group": {"field": group_by, "value": used_group} if used_group else None,
+                "n_deals": int(len(series)),
+                "p25": round(p25, 3),
+                "p50": round(p50, 3),
+                "p75": round(p75, 3),
+            }
 
     @staticmethod
     def compute_implied_multiple(deal_size_mm: float, metric_mm: float) -> Optional[float]:
         """EV / metric, e.g. deal_size_mm / target_ebitda_mm -> ev_ebitda_multiple."""
-        if not metric_mm:
+        if not metric_mm or deal_size_mm is None:
             return None
         return round(deal_size_mm / metric_mm, 2)
 
@@ -207,16 +202,6 @@ def dispatch_tool_call(comps: CSV_Analytics, tool_name: str, tool_input: dict):
     return fn(**tool_input)
 
 
-# ---------------------------------------------------------------------------
-# Explicit args schemas.
-#
-# StructuredTool.from_function() can auto-infer a schema from type hints, but
-# it chokes on Optional[...]/Union[...]/Any/list[Any] signatures (several of
-# these methods use exactly that, for the "single value or list of values"
-# peer-group filtering pattern). Declaring the schemas explicitly also lets
-# us give each *field* its own description, which is what the calling LLM
-# actually reads when deciding how to fill in arguments.
-# ---------------------------------------------------------------------------
 
 class RelativeStatThresholdsInput(BaseModel):
     column: str = Field(

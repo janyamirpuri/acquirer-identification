@@ -5,8 +5,10 @@ import pandas as pd
 
 import app
 from analysis.llm_service import chat
+from analysis.step_0 import field_extractions
 from analysis.step_0.field_extractions import _parse_final_json
 from analysis.step_1.transaction_scoring import full_scoring_method
+from analysis.step_2 import rationale_building
 from analysis.step_2.tool_definitions import CSV_Analytics
 
 
@@ -37,6 +39,54 @@ def test_chat_retries_transient_failures():
 
     assert chat("hello", client=FakeClient()) == "ok"
     assert attempts["count"] == 2
+
+
+def test_generate_rationale_uses_agent_executor(monkeypatch):
+    executor_options = {}
+
+    class FakeExecutor:
+        def __init__(self, **kwargs):
+            executor_options.update(kwargs)
+
+        def invoke(self, inputs):
+            assert inputs == {"target_description": "Target profile", "acquirer": "Apex"}
+            return {"output": '{"acquirer_name": "Apex"}'}
+
+    monkeypatch.setattr(rationale_building, "make_langchain_tools", lambda comps: ["tool"])
+    monkeypatch.setattr(rationale_building, "create_tool_calling_agent", lambda client, tools, prompt: "agent")
+    monkeypatch.setattr(rationale_building, "AgentExecutor", FakeExecutor)
+
+    rationale = rationale_building.generate_rationale(
+        "Apex", "Target profile", comps=None, client=object(), max_turns=3
+    )
+
+    assert rationale.acquirer_name == "Apex"
+    assert executor_options["agent"] == "agent"
+    assert executor_options["max_iterations"] == 3
+
+
+def test_extract_deal_record_uses_agent_executor(monkeypatch):
+    executor_options = {}
+
+    class FakeExecutor:
+        def __init__(self, **kwargs):
+            executor_options.update(kwargs)
+
+        def invoke(self, inputs):
+            assert inputs == {"description": "Acme, a healthcare company"}
+            return {"output": '{"sector": "Healthcare"}'}
+
+    monkeypatch.setattr(field_extractions, "make_langchain_tools", lambda comps: ["tool"])
+    monkeypatch.setattr(field_extractions, "create_tool_calling_agent", lambda client, tools, prompt: "agent")
+    monkeypatch.setattr(field_extractions, "AgentExecutor", FakeExecutor)
+
+    record = field_extractions.extract_deal_record(
+        "Acme, a healthcare company", comps=None, client=object(), max_turns=2
+    )
+
+    assert record.sector == "Healthcare"
+    assert executor_options["agent"] == "agent"
+    assert executor_options["max_iterations"] == 2
 
 
 def test_full_scoring_method_returns_similarity_scores(monkeypatch):
@@ -81,6 +131,7 @@ def test_full_scoring_method_returns_similarity_scores(monkeypatch):
     assert "similarity_score" in scored.columns
     assert scored["similarity_score"].notna().all()
     assert scored["similarity_score"].between(0.0, 1.0).all()
+    assert scored.loc[1, "similarity_score"] == scored["similarity_score"].max()
 
 
 def test_csv_analytics_relative_thresholds_and_peer_benchmark(tmp_path):
@@ -99,7 +150,9 @@ def test_csv_analytics_relative_thresholds_and_peer_benchmark(tmp_path):
     thresholds = analytics.relative_stat_thresholds("deal_size_mm")
 
     assert thresholds["column"] == "deal_size_mm"
-    assert set(thresholds["tiers"]).issuperset({"weak", "standard", "strong"})
+    assert thresholds["p25"] == 54.75
+    assert thresholds["p50"] == 59.5
+    assert thresholds["p75"] == 64.25
     assert thresholds["n_deals"] == 20
 
     benchmark = analytics.get_peer_group_benchmark("sector", "Healthcare", ["deal_size_mm", "ev_ebitda_multiple"])

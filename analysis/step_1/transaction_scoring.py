@@ -30,7 +30,7 @@ CATEGORICAL_SCORE_COLUMNS = [
 ]
 
 VALID_SIMILARITY_SCORES = {0, 0.5, 1}
-RELIABILITY_WEIGHT = 7
+RELIABILITY_WEIGHT = 3
 
 UNIQUE_VALUE_SCORING_PROMPT = """
 You are a strict terminology similarity grader. You will score the similarity between ONE target term and a LIST of distinct comparison terms, one score per comparison term.
@@ -62,7 +62,7 @@ def _normalize_score_column(scored_df: pd.DataFrame, source_column: str, score_n
     score_col = f"score_{score_name}"
 
     scored_df[distance_col] = np.abs(scored_df[source_column] - scored_df[source_column].min())
-    scored_df[score_col] = (
+    scored_df[score_col] = 1 - (
         scored_df[distance_col] - scored_df[distance_col].min()
     ) / (scored_df[distance_col].max() - scored_df[distance_col].min())
     return scored_df
@@ -84,7 +84,7 @@ def _score_log_distance_feature(transactions_df: pd.DataFrame, target_info: dict
         scored_df[distance_col] = np.abs(log_values - log_target)
         min_distance = scored_df[distance_col].min()
         max_distance = scored_df[distance_col].max()
-        scored_df[score_col] = (scored_df[distance_col] - min_distance) / (max_distance - min_distance)
+        scored_df[score_col] = 1 - (scored_df[distance_col] - min_distance) / (max_distance - min_distance)
 
     return scored_df
 
@@ -100,7 +100,7 @@ def _score_absolute_distance_feature(transactions_df: pd.DataFrame, target_info:
         scored_df[f"distance_{column}"] = np.abs(scored_df[column] - target_info[column])
         min_distance = scored_df[f"distance_{column}"].min()
         max_distance = scored_df[f"distance_{column}"].max()
-        scored_df[f"score_abs_{column}"] = (
+        scored_df[f"score_abs_{column}"] = 1 - (
             scored_df[f"distance_{column}"] - min_distance
         ) / (max_distance - min_distance)
 
@@ -200,7 +200,7 @@ def full_scoring_method(transactions_df: pd.DataFrame, target_info: dict, client
     return scored_df[original_columns.tolist() + ["similarity_score"]]
 
 
-def acquirer_identification(transactions_df: pd.DataFrame, target_info: dict, client=None) -> pd.DataFrame:
+def acquirer_identification(transactions_df: pd.DataFrame, target_info: dict, client=None) -> list[str]:
     """Rank acquirers by weighted similarity of their historical deals to the target deal."""
     scored_df = full_scoring_method(transactions_df, target_info, client)
     global_mean = scored_df["similarity_score"].mean()

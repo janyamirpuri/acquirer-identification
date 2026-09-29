@@ -4,9 +4,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-INPUT_FILE = "user_output.txt"
-OUTPUT_FILE = "output.html"
-
 FIELD_LABELS = {
     "acquirer_overview": "Acquirer Overview",
     "strategic_fit": "Strategic Fit",

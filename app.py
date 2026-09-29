@@ -104,27 +104,6 @@ def run_analysis_pipeline(csv_path: str, description: str, client=None):
         raise RuntimeError(f"Analysis failed: {exc}") from exc
 
 
-# def main():
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument("--csv", required=True, help="Path to the prior deals CSV")
-#     parser.add_argument("--description", required=True, help="Free-text deal description")
-#     args = parser.parse_args()
-
-#     time0 = time.time()
-
-#     pipeline = build_pipeline()
-#     result = pipeline.invoke({"csv": args.csv, "description": args.description})
-#     sub_analyses = [rationale.model_dump() for rationale in result["rationales"]]
-#     html_out = build_html(sub_analyses)
-#     with open("user_output.html", "w", encoding="utf-8") as f:
-#         f.write(html_out)
-#     print(f"Wrote {len(sub_analyses)} entries to user_output.html")
-#     print(f"Pipeline execution time: {time.time() - time0:.2f} seconds")
-
-
-# if __name__ == "__main__":
-#     main()
-
 def main():
     st.title("Acquirer Analysis Pipeline")
 
