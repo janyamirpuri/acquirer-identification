@@ -21,7 +21,6 @@ def client_instance():
         api_key=api_key,
         temperature=0,
         seed=42,
-        reasoning_effort="medium"
     )
 
 

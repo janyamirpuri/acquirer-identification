@@ -187,8 +187,8 @@ def full_scoring_method(transactions_df: pd.DataFrame, target_info: dict, client
 
     if categorical_columns and non_categorical_columns:
         scored_df["similarity_score"] = (
-            0.4 * scored_df[categorical_columns].mean(axis=1)
-            + 0.6 * scored_df[non_categorical_columns].mean(axis=1)
+            0.7 * scored_df[categorical_columns].mean(axis=1)
+            + 0.3 * scored_df[non_categorical_columns].mean(axis=1)
         )
     elif categorical_columns:
         scored_df["similarity_score"] = scored_df[categorical_columns].mean(axis=1)
@@ -215,4 +215,7 @@ def acquirer_identification(transactions_df: pd.DataFrame, target_info: dict, cl
         grouped["n_deals"] * grouped["avg_score"] + RELIABILITY_WEIGHT * global_mean
     ) / (grouped["n_deals"] + RELIABILITY_WEIGHT)
 
-    return grouped.sort_values("reliability_score", ascending=False).reset_index()[:10]["acquirer"].tolist()
+    acquirers = grouped.sort_values("reliability_score", ascending=False).reset_index()[:10]["acquirer"].tolist()
+    logging.info("Top acquirers: %s", acquirers)
+
+    return acquirers
